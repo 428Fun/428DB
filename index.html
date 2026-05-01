@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>四ッ谷やえ 歌枠データベース</title>
+    <style>
+        :root {
+            --primary-color: #4CAF50;
+            --bg-color: #f4f7f6;
+            --card-bg: #ffffff;
+        }
+
+        body {
+            font-family: "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-color);
+            margin: 0;
+            padding: 20px;
+            color: #333;
+        }
+
+        header { text-align: center; margin-bottom: 30px; }
+
+        #searchBar {
+            width: 90%;
+            max-width: 600px;
+            padding: 15px 25px;
+            font-size: 16px;
+            border: 2px solid #ddd;
+            border-radius: 30px;
+            outline: none;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        }
+
+        #songGrid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 25px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            cursor: pointer;
+            transition: transform 0.3s;
+        }
+
+        .card:hover { transform: translateY(-5px); }
+
+        .thumb-container {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            background: #000;
+        }
+
+        .thumb-container img { width: 100%; height: 100%; object-fit: cover; }
+
+        .card-info { padding: 15px; }
+        .card-info h3 { margin: 0 0 10px 0; font-size: 1.1rem; line-height: 1.4; }
+        .card-info p { margin: 2px 0; font-size: 0.8rem; color: #777; }
+        .date-tag {
+            display: inline-block;
+            background: #e8f5e9;
+            color: #2e7d32;
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin-top: 8px;
+            font-size: 0.8rem;
+            font-weight: bold;
+        }
+
+        /* --- 再生画面（モーダル）の劇的改善 --- */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.95);
+            display: none; /* JSで制御 */
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            position: relative;
+            width: 95%;
+            height: 90vh; /* 画面の高さの90%まで使う */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* iframeそのものの設定: 縦横比を固定せず、中身に合わせて最大化 */
+        #playerContainer {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-content iframe {
+            width: 100%;
+            height: 100%;
+            max-width: 1600px; /* PCでの最大横幅 */
+            max-height: 100%;
+            border: none;
+            border-radius: 10px;
+            /* 縦横比をYouTubeに任せる設定 */
+            aspect-ratio: auto; 
+        }
+
+        .close-btn {
+            position: absolute;
+            top: -40px;
+            right: 10px;
+            color: white;
+            font-size: 40px;
+            cursor: pointer;
+            z-index: 1002;
+        }
+
+        #loading { text-align: center; margin-top: 50px; color: #666; }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>🎤 歌枠データベース</h1>
+    <input type="text" id="searchBar" placeholder="曲名、配信タイトルで検索..." oninput="filterSongs()">
+</header>
+
+<div id="loading">データを読み込み中...</div>
+<main id="songGrid"></main>
+
+<div id="videoModal" class="modal">
+    <div class="modal-content">
+        <span class="close-btn" onclick="closeModal()">&times;</span>
+        <div id="playerContainer"></div>
+    </div>
+</div>
+
+<script>
+    const SHEET_ID = '12TvrTBeUD7LT5uuc85vnghAsD3XTz2vObvyRVZX_qzQ';
+    const JSON_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&tq=select%20*`;
+
+    let songData = [];
+
+    async function fetchSongs() {
+        try {
+            const response = await fetch(JSON_URL);
+            const text = await response.text();
+            const json = JSON.parse(text.substr(47).slice(0, -2));
+            songData = json.table.rows.map(row => {
+                const getVal = (idx) => (row.c && row.c[idx]) ? (row.c[idx].f || String(row.c[idx].v || '')) : '';
+                return { date: getVal(0), title: getVal(1), songName: getVal(2), url: getVal(3) };
+            }).filter(item => item.url && item.url.includes('youtu'));
+            document.getElementById('loading').style.display = 'none';
+            renderCards(songData);
+        } catch (e) {
+            document.getElementById('loading').innerText = '読み込み失敗。設定を確認してください。';
+        }
+    }
+
+    function parseYoutubeUrl(url) {
+        const videoIdMatch = url.match(/(?:youtu\.be\/|v=|\/embed\/|watch\?v=|\/v\/)([^#&?]*)/);
+        const videoId = (videoIdMatch && videoIdMatch[1].length === 11) ? videoIdMatch[1] : '';
+        const timeMatch = url.match(/[?&]t=(\d+)/);
+        return { videoId, startTime: timeMatch ? timeMatch[1] : 0 };
+    }
+
+    function renderCards(data) {
+        const grid = document.getElementById('songGrid');
+        grid.innerHTML = data.map(song => {
+            const { videoId } = parseYoutubeUrl(song.url);
+            if (!videoId) return '';
+            return `
+                <div class="card" onclick="openModal('${song.url.replace(/'/g, "\\'")}')">
+                    <div class="thumb-container">
+                        <img src="https://img.youtube.com/vi/${videoId}/mqdefault.jpg" alt="thumbnail">
+                        <div class="play-overlay">再生</div>
+                    </div>
+                    <div class="card-info">
+                        <h3>${song.songName}</h3>
+                        <p>${song.title}</p>
+                        <span class="date-tag">${song.date}</span>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    function filterSongs() {
+        const query = document.getElementById('searchBar').value.toLowerCase();
+        renderCards(songData.filter(s => s.songName.toLowerCase().includes(query) || s.title.toLowerCase().includes(query)));
+    }
+
+    function openModal(url) {
+        const { videoId, startTime } = parseYoutubeUrl(url);
+        const embedUrl = `https://www.youtube.com/embed/${videoId}?start=${startTime}&autoplay=1`;
+        document.getElementById('playerContainer').innerHTML = `<iframe src="${embedUrl}" allow="autoplay; encrypted-media" allowfullscreen></iframe>`;
+        document.getElementById('videoModal').style.display = 'flex';
+    }
+
+    function closeModal() {
+        document.getElementById('videoModal').style.display = 'none';
+        document.getElementById('playerContainer').innerHTML = '';
+    }
+
+    fetchSongs();
+    window.onclick = (e) => { if (e.target.id == 'videoModal') closeModal(); }
+</script>
+</body>
+</html>
